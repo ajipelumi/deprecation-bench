@@ -72,24 +72,33 @@ RESULT = _run.result if hasattr(_run, "result") else _run
 with open(f"/kaggle/working/result-{MODEL.replace('/', '-')}.json", "w") as fh:
     json.dump(RESULT, fh, indent=2)
 
-for _k in ("accuracy", "accuracy_committed", "accuracy_knowledge",
-           "accuracy_premise", "knowledge_premise_gap", "unclear_rate",
-           "missed_removal_rate", "over_warn_rate", "denies_existence_rate"):
-    print(f"{_k:<24}{RESULT[_k]}")
-print(f"{'by_truth':<24}{RESULT['accuracy_by_truth']}")
-print(f"{'by_bucket':<24}{RESULT['accuracy_by_bucket']}")
+for _k in ("n_samples_per_question", "mean_consistency", "unstable_rate",
+           "self_contradictory_rate", "accuracy", "accuracy_committed",
+           "accuracy_knowledge", "accuracy_premise", "knowledge_premise_gap",
+           "unclear_rate", "missed_removal_rate", "over_warn_rate",
+           "denies_existence_rate"):
+    print(f"{_k:<26}{RESULT[_k]}")
+print(f"{'by_truth':<26}{RESULT['accuracy_by_truth']}")
+print(f"{'by_bucket':<26}{RESULT['accuracy_by_bucket']}")
+
+print("\\n--- questions answered inconsistently across samples ---")
+for _row in sorted(RESULT["rows"], key=lambda r: r["consistency"]):
+    if _row["consistency"] < 1.0:
+        _flag = "  CONTRADICTORY" if _row["self_contradictory"] else ""
+        print(f"{_row['item']}/{_row['form']:<10} truth={_row['truth']:<16} "
+              f"{_row['verdicts']}{_flag}")
 
 print("\\n--- unreadable responses (should be near zero) ---")
 for _row in RESULT["rows"]:
     if _row["predicted"] == UNCLEAR:
         print(f"{_row['item']}/{_row['form']}: {_row['response'][:160]}")
 
-print("\\n--- wrong answers ---")
+print("\\n--- wrong answers (modal verdict) ---")
 for _row in RESULT["rows"]:
     if not _row["correct"] and _row["predicted"] != UNCLEAR:
-        print(f"\\n{_row['item']}/{_row['form']} "
-              f"truth={_row['truth']} said={_row['predicted']}")
-        print(f"   {_row['response'][:220]}")
+        print(f"\\n{_row['item']}/{_row['form']} truth={_row['truth']} "
+              f"said={_row['predicted']} consistency={_row['consistency']}")
+        print(f"   {_row['response'][:200]}")
 ''' % MODEL
 
 # Helpers that exist for local inspection and have no caller in the notebook.

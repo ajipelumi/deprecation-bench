@@ -18,6 +18,7 @@ Run locally with `python task.py` to validate before pushing.
 
 import os
 import sys
+from collections import Counter
 
 import kaggle_benchmarks as kbench
 
@@ -37,6 +38,22 @@ from items import ITEMS  # noqa: E402
 # unset, a single call to an expensive model can reserve several dollars against
 # a $10 daily quota and then be refused. This cap is not a nicety.
 MAX_TOKENS = 4096
+
+# Samples per question. One is not a measurement.
+#
+# The library's prompt() signature reads `temperature: float = 0`, but
+# actors/llms.py sends `temperature if self.support_temperature else None`, and
+# support_temperature defaults to False. So temperature is never sent and the
+# provider's own default applies, which for Gemini is around 1.0. Two runs of
+# this benchmark produced opposite answers to the same question: cf-audit-ssh
+# went from "is current, you can still enable this" to "no, you can no longer
+# create these rules".
+#
+# With sampling in play, a single response per item measures one draw from a
+# distribution, not the model's knowledge. Repeating each question lets the
+# instability itself be reported, which is the more interesting result: being
+# wrong is ordinary, being wrong in both directions at once is not.
+N_SAMPLES = 3
 
 # Asking for a short answer keeps cost down and makes classification cleaner:
 # long answers hedge in both directions and land in UNCLEAR.
@@ -129,8 +146,15 @@ def deprecation_state(llm) -> dict:
     for item in ITEMS:
         for form in ("knowledge", "premise"):
             question = item.knowledge_q if form == "knowledge" else item.premise_q
-            response = _ask(llm, question)
-            predicted = classify(response)
+
+            samples = []
+            for _ in range(N_SAMPLES):
+                response = _ask(llm, question)
+                samples.append((classify(response), response))
+
+            verdicts = [p for p, _ in samples]
+            tally = Counter(verdicts)
+            modal, modal_n = tally.most_common(1)[0]
 
             rows.append(
                 {
@@ -139,9 +163,24 @@ def deprecation_state(llm) -> dict:
                     "bucket": item.bucket,
                     "form": form,
                     "truth": item.truth,
-                    "predicted": predicted,
-                    "correct": predicted == item.truth,
-                    "response": response,
+                    # The modal verdict across samples, not a single draw.
+                    "predicted": modal,
+                    "correct": modal == item.truth,
+                    # Fraction of samples agreeing with the mode. 1.0 means the
+                    # model said the same thing every time; 0.34 at N=3 means it
+                    # said three different things.
+                    "consistency": round(modal_n / len(verdicts), 4),
+                    "verdicts": verdicts,
+                    "distinct_verdicts": len(tally),
+                    # Did the model contradict itself about whether the feature
+                    # works at all? CURRENT and REMOVED are not degrees of the
+                    # same answer, they are opposites.
+                    "self_contradictory": bool(
+                        {CURRENT, REMOVED} <= set(verdicts)
+                        or {CURRENT, DENIES_EXISTENCE} <= set(verdicts)
+                    ),
+                    "response": samples[0][1],
+                    "all_responses": [r for _, r in samples],
                 }
             )
 
@@ -211,6 +250,17 @@ def deprecation_state(llm) -> dict:
         "over_warn_rate": rate(over_warned, rows),
         "denies_existence_rate": rate(denied, rows),
         "unclear_rate": rate([r for r in rows if r["predicted"] == UNCLEAR], rows),
+        # Stability. mean_consistency is the headline: 1.0 means every question
+        # got the same answer on every sample. Anything well below that means
+        # single-sample numbers from this benchmark, or any like it, are noise.
+        "mean_consistency": round(
+            sum(r["consistency"] for r in rows) / len(rows), 4
+        ) if rows else 0.0,
+        "unstable_rate": rate([r for r in rows if r["consistency"] < 1.0], rows),
+        "self_contradictory_rate": rate(
+            [r for r in rows if r["self_contradictory"]], rows
+        ),
+        "n_samples_per_question": N_SAMPLES,
         # Accuracy over responses the model actually committed on, excluding
         # both UNCLEAR and the cutoff artefact. Reported alongside raw accuracy
         # rather than instead of it: dropping inconvenient rows and quoting the

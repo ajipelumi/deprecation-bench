@@ -45,11 +45,36 @@ PREAMBLE = (
 )
 
 
+def _token_cap(model_name: str) -> dict:
+    """Output-token cap, in whichever spelling the provider expects.
+
+    `prompt()` has no max-tokens parameter of its own; the limit goes through
+    `extra_api_params`, and the key is provider-specific. Google models take
+    `max_output_tokens`, OpenAI-compatible ones take `max_tokens`.
+
+    This is not a tuning knob. The Kaggle proxy reserves the worst-case cost of
+    every call from the output limit and refuses the call when that exceeds the
+    remaining daily quota. Unset, a single call to a large model can reserve
+    several dollars against a $10 cap.
+    """
+    name = (model_name or "").lower()
+    if name.startswith("google/") or "gemini" in name or "gemma" in name:
+        return {"max_output_tokens": MAX_TOKENS}
+    return {"max_tokens": MAX_TOKENS}
+
+
 def _ask(llm, question):
-    return llm.prompt(
-        f"{PREAMBLE}\n\n{question}",
-        max_completion_tokens=MAX_TOKENS,
-    )
+    model_name = getattr(llm, "name", "") or getattr(llm, "model", "") or ""
+    text = f"{PREAMBLE}\n\n{question}"
+    try:
+        return llm.prompt(text, extra_api_params=_token_cap(str(model_name)))
+    except Exception as exc:
+        # A provider that rejects the key would otherwise kill the whole run
+        # after burning most of it. Fall back uncapped and say so loudly.
+        if "max_" not in str(exc):
+            raise
+        print(f"  token cap rejected ({exc}); retrying uncapped")
+        return llm.prompt(text)
 
 
 @kbench.task(name="deprecation_state")

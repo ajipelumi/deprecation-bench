@@ -581,7 +581,7 @@ Run locally with `python task.py` to validate before pushing.
 # The proxy reserves worst-case cost per call from the output-token limit. Left
 # unset, a single call to an expensive model can reserve several dollars against
 # a $10 daily quota and then be refused. This cap is not a nicety.
-MAX_TOKENS = 1024
+MAX_TOKENS = 4096
 
 # Asking for a short answer keeps cost down and makes classification cleaner:
 # long answers hedge in both directions and land in UNCLEAR.
@@ -611,34 +611,59 @@ _WORKING_CAP_KEY: list = []
 
 
 def _ask(llm, question):
+    """One question, one isolated conversation.
+
+    `llm.prompt()` accumulates history by default, which would break this
+    benchmark two ways. Items would see each other's answers, so a model primed
+    by three deprecation questions would answer the fourth differently and the
+    measurement would depend on item order. Worse, a reasoning model that spends
+    its whole output budget thinking returns an empty message, and that empty
+    turn stays in history: the next call then ships a message with no parts and
+    the provider rejects the whole request. One empty response would kill the
+    run.
+
+    `kbench.chats.new()` gives each call a clean slate, so items are independent
+    and an empty response costs one row instead of the run.
+    """
     text = f"{PREAMBLE}\n\n{question}"
 
-    if _WORKING_CAP_KEY:
-        key = _WORKING_CAP_KEY[0]
-        if key is None:
-            return llm.prompt(text)
-        return llm.prompt(text, extra_api_params={key: MAX_TOKENS})
+    def _send():
+        if _WORKING_CAP_KEY:
+            key = _WORKING_CAP_KEY[0]
+            return llm.prompt(text, extra_api_params={key: MAX_TOKENS})
 
-    for key in _CAP_KEYS:
+        for key in _CAP_KEYS:
+            try:
+                out = llm.prompt(text, extra_api_params={key: MAX_TOKENS})
+            except TypeError as exc:
+                if "unexpected keyword argument" not in str(exc):
+                    raise
+                continue
+            _WORKING_CAP_KEY.append(key)
+            print(f"  output cap set via extra_api_params={{{key!r}: {MAX_TOKENS}}}")
+            return out
+
+        # No spelling accepted. Running uncapped risks the reservation trap, so
+        # stop rather than quietly spending the daily quota a few calls at a time.
+        raise RuntimeError(
+            "Could not set an output-token cap: none of "
+            f"{_CAP_KEYS} was accepted. Running uncapped risks the proxy "
+            "reserving several dollars per call against the daily quota. "
+            "Inspect `inspect.signature(llm.prompt)` and the proxy's accepted "
+            "parameters before continuing."
+        )
+
+    with kbench.chats.new("item"):
         try:
-            out = llm.prompt(text, extra_api_params={key: MAX_TOKENS})
-        except TypeError as exc:
-            if "unexpected keyword argument" not in str(exc):
-                raise
-            continue
-        _WORKING_CAP_KEY.append(key)
-        print(f"  output cap set via extra_api_params={{{key!r}: {MAX_TOKENS}}}")
-        return out
-
-    # No spelling accepted. Running uncapped risks the reservation trap, so stop
-    # rather than quietly spending the daily quota a few calls at a time.
-    raise RuntimeError(
-        "Could not set an output-token cap: none of "
-        f"{_CAP_KEYS} was accepted. Running uncapped risks the proxy reserving "
-        "several dollars per call against the daily quota. Inspect "
-        "`inspect.signature(llm.prompt)` and the proxy's accepted parameters "
-        "before continuing."
-    )
+            return _send() or ""
+        except Exception as exc:
+            # An empty completion from a reasoning model that spent its budget
+            # thinking surfaces here. Record it as an unusable response rather
+            # than losing every item after it.
+            if "parts field" in str(exc) or "message=None" in str(exc):
+                print(f"  empty response, scored UNCLEAR: {str(exc)[:90]}")
+                return ""
+            raise
 
 
 @kbench.task(name="deprecation_state")

@@ -1,20 +1,20 @@
 # %%
 """Deprecation state benchmark: does the model know what still works?
 
-Three states, not two. A feature can be REMOVED (end of life passed),
-DEPRECATED_LIVE (announced deprecated, still functional), or CURRENT. Collapsing
-the middle state hides two opposite failures: calling a removed feature current
-(the model hands you code that cannot work) and calling a live feature removed
-(a model that cries deprecation at everything cannot be trusted when it is right).
+Four states. A feature can be REMOVED (end of life passed), DEPRECATED_LIVE
+(announced deprecated, still functional), or CURRENT. The fourth state is the
+model's, not the feature's: DENIES_EXISTENCE, where a model whose training
+predates the feature reports it was never real. That is a cutoff artefact, and
+scoring it as a knowledge failure would misreport what the model got wrong.
 
-Each item is asked twice: neutrally, and in a form that assumes the feature works.
-The gap between the two is the headline metric. A model can know a feature is gone
-and write the code anyway.
+Each item is asked twice: neutrally, and in a form that assumes the feature
+works. The gap between the two is the headline metric. A model can know a feature
+is gone and write the code anyway.
 
-Ground truth is vendor-published and quoted inline. Announcement date and shutdown
-date are separate fields, because conflating them is the exact error being measured.
+Ground truth is vendor-published and quoted inline. Announcement date and
+shutdown date are separate fields, because conflating them is the exact error
+being measured.
 
-Sources:
   https://developers.cloudflare.com/fundamentals/api/reference/deprecations/
   https://developers.openai.com/api/docs/deprecations
 """
@@ -399,23 +399,64 @@ import re
 REMOVED = "REMOVED"
 DEPRECATED_LIVE = "DEPRECATED_LIVE"
 CURRENT = "CURRENT"
+DENIES_EXISTENCE = "DENIES_EXISTENCE"
 UNCLEAR = "UNCLEAR"
 
-# Claims the feature is gone / no longer works.
+# Markdown emphasis is stripped before matching, so patterns never need to
+# account for **bold** or *italic* around the load-bearing word.
+_EMPHASIS = re.compile(r"[*_`]+")
+
+# ---------------------------------------------------------------------------
+# Denies the feature ever existed. Checked FIRST: these responses often also
+# contain currency language about some replacement ("there is no Agent Builder,
+# but the Assistants API is current"), and the denial is the claim being made
+# about the asked-about feature.
+# ---------------------------------------------------------------------------
+_DENIES_PAT = [
+    r"\bis fictional\b",
+    r"\bdoes not exist\b",
+    r"\bdoesn't exist\b",
+    r"\bnever existed\b",
+    r"\bnot a real\b",
+    r"\bno such (?:model|api|endpoint|feature|product|setting|header)\b",
+    r"\bis not recognized\b",
+    r"\bnot recognized (?:as|in)\b",
+    r"\bdoes not correspond to any\b",
+    r"\bthere is no (?:specific )?(?:product|model|api|endpoint|feature)\b",
+    r"\bno (?:publicly )?(?:announced|documented) (?:distinct )?(?:api|product|model)\b",
+    r"\bdoes not (?:currently )?offer a public product\b",
+    r"\bis not (?:a )?current(?:ly)? (?:feature|way|functionality)\b",
+    r"\bnot a current feature\b",
+    r"\bis not a current\b",
+    r"\bdoes not currently offer\b",
+    r"\bare not current for\b",
+    r"\bnot current for\b",
+    r"\bis not current;",
+    r"\bno publicly announced\b",
+    r"\bnot (?:a )?(?:publicly )?(?:documented|announced)\b",
+]
+
+# ---------------------------------------------------------------------------
+# Claims the feature is gone.
+# ---------------------------------------------------------------------------
 _REMOVED_PAT = [
     r"\b(?:was|has been|have been|is|are|been)\s+(?:fully\s+|completely\s+|now\s+)?removed\b",
-    r"\bno longer (?:available|supported|works?|work|accepted|possible|exists?)\b",
+    r"\bno longer (?:available|supported|works?|work|accepted|possible|offered)\b",
+    r"\bno longer a\b",
+    r"\bthere is no longer\b",
     r"\b(?:has|have|was|is)\s+(?:been\s+)?(?:shut down|sunset|retired|discontinued)\b",
     r"\breached (?:its )?end[- ]of[- ]life\b",
     r"\b(?:end of life|eol) (?:has )?(?:passed|already passed)\b",
     r"\bcannot (?:be used|use|still use|authenticate|create)\b",
     r"\bnot (?:available|supported) (?:any ?more|anymore|any longer)\b",
-    r"\bthis (?:endpoint|api|feature|model|header|method) (?:is|was) gone\b",
     r"\bstopped working\b",
     r"\bwill (?:fail|be rejected|return an error)\b",
+    r"\bfeature has been removed\b",
 ]
 
-# Claims the feature is deprecated but still usable.
+# ---------------------------------------------------------------------------
+# Claims it is deprecated but usable.
+# ---------------------------------------------------------------------------
 _DEPRECATED_PAT = [
     r"\bdeprecated\b",
     r"\bscheduled (?:to|for) (?:shut down|shutdown|removal|be removed)\b",
@@ -425,30 +466,33 @@ _DEPRECATED_PAT = [
     r"\bsunsetting\b",
     r"\bbeing phased out\b",
     r"\bcompatibility alias\b",
-    r"\blegacy\b",
 ]
 
-# Claims it still works / is fine.
+# ---------------------------------------------------------------------------
+# Claims it works. The bare "is current" forms are the ones that matter: real
+# models use them constantly and the first version of this file had none.
+# ---------------------------------------------------------------------------
 _LIVE_PAT = [
-    r"\b(?:still|currently) (?:available|supported|works?|work|functional|valid|accepted)\b",
-    r"\byes,? (?:you can|it is|it works|this works)\b",
-    r"\bcontinues? to (?:work|function|be supported)\b",
-    r"\bremains? (?:available|supported|functional)\b",
-    r"\byou can (?:still|continue to)\b",
+    r"\b(?:is|are|remains?|stays?)\s+(?:still\s+)?current\b",
+    r"\bis current(?:ly)? (?:functionality|supported|available|the)\b",
+    r"\bthis is current\b",
     r"\b(?:is|are)\s+(?:the\s+)?(?:current|recommended|preferred)\b",
+    r"\b(?:still|currently) (?:available|supported|works?|work|functional|valid|accepted|enabled)\b",
+    r"\byes,? (?:you can|it is|it works|this works|this is|the)\b",
+    r"\bcontinues? to (?:work|function|be supported)\b",
+    r"\bremains? (?:available|supported|functional|a supported)\b",
+    r"\byou can (?:still|continue to)\b",
     r"\bfully supported\b",
-    r"\bno(?:t)? deprecated\b",
     r"\bworks? (?:fine|as expected|normally)\b",
+    r"\bactively supported\b",
 ]
 
-# Negation guards. If a deprecation/removal word sits inside one of these, the
-# claim is the opposite of what the bare keyword suggests.
-_NEG_PREFIX = r"(?:is|are|was|were|has|have|been|it|this|that|which|and|but)?\s*"
-_NEGATED_DEPRECATION = [
+# Negation guards: a deprecation/removal keyword inside one of these means the
+# opposite of what the bare keyword suggests.
+_NEGATED = [
     r"\bnot\s+(?:been\s+)?deprecated\b",
     r"\bn't\s+(?:been\s+)?deprecated\b",
     r"\bno\s+deprecation\b",
-    r"\bisn't deprecated\b",
     r"\bnot\s+(?:been\s+)?removed\b",
     r"\bn't\s+(?:been\s+)?removed\b",
     r"\bnot\s+(?:yet\s+)?(?:been\s+)?(?:shut down|retired|discontinued)\b",
@@ -459,99 +503,54 @@ def _any(pats, text):
     return any(re.search(p, text) for p in pats)
 
 
-def _strip_negated(text):
-    """Remove negated-deprecation spans so their keywords do not fire."""
-    out = text
-    for p in _NEGATED_DEPRECATION:
-        out = re.sub(p, " __NEG__ ", out)
-    return out
+def _normalise(response):
+    t = response.lower()
+    t = _EMPHASIS.sub("", t)          # drop markdown emphasis and code ticks
+    t = re.sub(r"\s+", " ", t)        # collapse newlines so patterns span lines
+    return t
 
 
 def classify(response: str) -> str:
-    """Map a free-text response to a state. Deterministic, order matters."""
+    """Map a free-text response to a state. Order matters; see module docstring."""
     if not response or not response.strip():
         return UNCLEAR
 
-    t = response.lower()
-    # Collapse whitespace so patterns spanning newlines still match.
-    t = re.sub(r"\s+", " ", t)
+    t = _normalise(response)
 
-    negation_present = _any(_NEGATED_DEPRECATION, t)
-    t_clean = _strip_negated(t)
+    negated = _any(_NEGATED, t)
+    t_clean = t
+    for p in _NEGATED:
+        t_clean = re.sub(p, " __neg__ ", t_clean)
+
+    # 1. Denial of existence wins. These responses frequently also praise some
+    #    replacement as current, and that currency claim is about a different
+    #    thing than the feature asked about.
+    if _any(_DENIES_PAT, t_clean):
+        return DENIES_EXISTENCE
 
     removed = _any(_REMOVED_PAT, t_clean)
     deprecated = _any(_DEPRECATED_PAT, t_clean)
     live = _any(_LIVE_PAT, t_clean)
 
-    # A removal claim is also, trivially, a deprecation claim. Check removal
-    # first so "deprecated and has now been removed" lands on REMOVED.
+    # 2. Removal outranks deprecation: "deprecated and now removed" is a removal.
     if removed and not live:
         return REMOVED
     if removed and live:
-        # Mixed signals. Common real shape: "X was removed, use Y which is
-        # still supported." The removal claim is about the asked-about feature,
-        # so it wins, but only when deprecation language backs it up.
-        return REMOVED if deprecated or not negation_present else UNCLEAR
+        return REMOVED if deprecated or not negated else UNCLEAR
 
-    if deprecated and not negation_present:
-        # Deprecated and the model did not claim it is gone.
+    # 3. Deprecated, not claimed gone.
+    if deprecated and not negated:
         return DEPRECATED_LIVE
 
     if live:
         return CURRENT
 
-    if negation_present:
-        # "not deprecated" with no other signal is a currency claim.
+    if negated:
         return CURRENT
 
     return UNCLEAR
 
 
-# --------------------------------------------------------------------------
-# Tests. Run `python classify.py` to check. These are hand-written responses in
-# the shapes models actually produce, including the awkward ones.
-# --------------------------------------------------------------------------
-CASES = [
-    # Clear removals
-    ("Service Key authentication was removed on September 30, 2026. Use API Tokens.", REMOVED),
-    ("No, that header is no longer supported. You should migrate to API Tokens.", REMOVED),
-    ("This model has been shut down and is not available in the API.", REMOVED),
-    ("That endpoint reached end-of-life in June 2026, so the call will fail.", REMOVED),
-    ("You cannot use audit_ssh rules any more; they stopped working in July 2026.", REMOVED),
-    # Removal plus a live replacement mentioned. Should still be REMOVED.
-    ("The Realtime beta was removed in May 2026. The GA Realtime API is still available and works fine.", REMOVED),
-    ("Service Keys are no longer accepted. API Tokens are the current recommended approach.", REMOVED),
-    # Deprecated but live
-    ("The foundation_dns boolean is deprecated but remains available as a compatibility alias.", DEPRECATED_LIVE),
-    ("This is deprecated and will be removed on November 23, 2026, so migrate soon.", DEPRECATED_LIVE),
-    ("The batch settings endpoints are legacy; migrate to per-setting requests before March 2027.", DEPRECATED_LIVE),
-    ("v1/prompts is scheduled to shut down, though you can still use it today.", DEPRECATED_LIVE),
-    # Current
-    ("Yes, API Tokens are the current recommended way to authenticate.", CURRENT),
-    ("That endpoint is fully supported and works as expected.", CURRENT),
-    ("This is not deprecated. You can use it normally.", CURRENT),
-    ("Yes, you can still read a single zone setting that way.", CURRENT),
-    # Negation traps. A naive matcher calls all three DEPRECATED_LIVE.
-    ("API Tokens are not deprecated and remain the recommended approach.", CURRENT),
-    ("This has not been removed; it continues to work.", CURRENT),
-    ("There is no deprecation notice for this endpoint.", CURRENT),
-    # Unclear
-    ("", UNCLEAR),
-    ("Here is a code sample.", UNCLEAR),
-    ("It depends on your account configuration.", UNCLEAR),
-]
-
-
-def _run_tests():
-    failures = []
-    for text, expected in CASES:
-        got = classify(text)
-        if got != expected:
-            failures.append((text[:70], expected, got))
-    print(f"classifier: {len(CASES) - len(failures)}/{len(CASES)} passed")
-    for text, exp, got in failures:
-        print(f"  FAIL expected={exp:<16} got={got:<16} {text!r}")
-    return not failures
 
 
 # ------------------------------------------------------------------------
@@ -693,7 +692,18 @@ def deprecation_state(llm) -> dict:
     scored = [r for r in rows if r["predicted"] != UNCLEAR]
     correct = [r for r in rows if r["correct"]]
 
-    # The two failures worth naming separately.
+    # The failures worth naming separately.
+    #
+    # missed_removal is the dangerous one: the model hands you code for a feature
+    # that no longer works.
+    #
+    # over_warn is its mirror: calling a live feature dead. Cheaper, but a model
+    # that cries deprecation at everything cannot be trusted when it is right.
+    #
+    # denies_existence is neither. It means the model's training predates the
+    # feature, so it reports the feature was never real. That is a cutoff
+    # artefact, not a knowledge failure, and conflating it with either of the
+    # above would misreport what the model got wrong.
     missed_removal = [
         r for r in rows
         if r["truth"] == REMOVED and r["predicted"] in (CURRENT, DEPRECATED_LIVE)
@@ -702,6 +712,7 @@ def deprecation_state(llm) -> dict:
         r for r in rows
         if r["truth"] in (DEPRECATED_LIVE, CURRENT) and r["predicted"] == REMOVED
     ]
+    denied = [r for r in rows if r["predicted"] == DENIES_EXISTENCE]
 
     def rate(subset, pool):
         return round(len(subset) / len(pool), 4) if pool else 0.0
@@ -742,13 +753,47 @@ def deprecation_state(llm) -> dict:
         "accuracy_by_truth": by_truth,
         "missed_removal_rate": rate(missed_removal, rows),
         "over_warn_rate": rate(over_warned, rows),
+        "denies_existence_rate": rate(denied, rows),
         "unclear_rate": rate([r for r in rows if r["predicted"] == UNCLEAR], rows),
+        # Accuracy over responses the model actually committed on, excluding
+        # both UNCLEAR and the cutoff artefact. Reported alongside raw accuracy
+        # rather than instead of it: dropping inconvenient rows and quoting the
+        # remainder would flatter every model with an early cutoff.
+        "accuracy_committed": rate(
+            [r for r in scored if r["correct"] and r["predicted"] != DENIES_EXISTENCE],
+            [r for r in scored if r["predicted"] != DENIES_EXISTENCE],
+        ),
         "n_calls": len(rows),
         "rows": rows,
     }
 
 
-# First pass: one cheap model. Swap the slug to compare others.
-# Registry keys carry a vendor prefix ("google/...", "meta/..."), not bare
-# slugs. Run `print(sorted(kbench.llms.keys()))` to list what is available.
-deprecation_state.run(llm=kbench.llms["google/gemini-2.5-flash"])
+MODEL = "google/gemini-2.5-flash"
+
+_run = deprecation_state.run(llm=kbench.llms[MODEL])
+RESULT = _run.result if hasattr(_run, "result") else _run
+
+# Persist before anything else. The SDK's progress widget fails to render on
+# Kaggle (Bokeh version mismatch in their JupyterLab), which swallows the cell
+# output, and a session restart wipes every in-memory name. The file survives both.
+import json
+with open(f"/kaggle/working/result-{MODEL.replace('/', '-')}.json", "w") as fh:
+    json.dump(RESULT, fh, indent=2)
+
+for k in ("accuracy", "accuracy_committed", "accuracy_knowledge",
+          "accuracy_premise", "knowledge_premise_gap", "unclear_rate",
+          "missed_removal_rate", "over_warn_rate", "denies_existence_rate"):
+    print(f"{k:<24}{RESULT[k]}")
+print(f"{'by_truth':<24}{RESULT['accuracy_by_truth']}")
+print(f"{'by_bucket':<24}{RESULT['accuracy_by_bucket']}")
+
+print("\n--- responses the classifier could not read (should be near zero) ---")
+for row in RESULT["rows"]:
+    if row["predicted"] == "UNCLEAR":
+        print(f"{row['item']}/{row['form']}: {row['response'][:160]}")
+
+print("\n--- wrong answers ---")
+for row in RESULT["rows"]:
+    if not row["correct"] and row["predicted"] != "UNCLEAR":
+        print(f"\n{row['item']}/{row['form']} truth={row['truth']} said={row['predicted']}")
+        print(f"   {row['response'][:220]}")

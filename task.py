@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from classify import (  # noqa: E402
     CURRENT,
+    DENIES_EXISTENCE,
     DEPRECATED_LIVE,
     REMOVED,
     UNCLEAR,
@@ -147,7 +148,18 @@ def deprecation_state(llm) -> dict:
     scored = [r for r in rows if r["predicted"] != UNCLEAR]
     correct = [r for r in rows if r["correct"]]
 
-    # The two failures worth naming separately.
+    # The failures worth naming separately.
+    #
+    # missed_removal is the dangerous one: the model hands you code for a feature
+    # that no longer works.
+    #
+    # over_warn is its mirror: calling a live feature dead. Cheaper, but a model
+    # that cries deprecation at everything cannot be trusted when it is right.
+    #
+    # denies_existence is neither. It means the model's training predates the
+    # feature, so it reports the feature was never real. That is a cutoff
+    # artefact, not a knowledge failure, and conflating it with either of the
+    # above would misreport what the model got wrong.
     missed_removal = [
         r for r in rows
         if r["truth"] == REMOVED and r["predicted"] in (CURRENT, DEPRECATED_LIVE)
@@ -156,6 +168,7 @@ def deprecation_state(llm) -> dict:
         r for r in rows
         if r["truth"] in (DEPRECATED_LIVE, CURRENT) and r["predicted"] == REMOVED
     ]
+    denied = [r for r in rows if r["predicted"] == DENIES_EXISTENCE]
 
     def rate(subset, pool):
         return round(len(subset) / len(pool), 4) if pool else 0.0
@@ -196,7 +209,16 @@ def deprecation_state(llm) -> dict:
         "accuracy_by_truth": by_truth,
         "missed_removal_rate": rate(missed_removal, rows),
         "over_warn_rate": rate(over_warned, rows),
+        "denies_existence_rate": rate(denied, rows),
         "unclear_rate": rate([r for r in rows if r["predicted"] == UNCLEAR], rows),
+        # Accuracy over responses the model actually committed on, excluding
+        # both UNCLEAR and the cutoff artefact. Reported alongside raw accuracy
+        # rather than instead of it: dropping inconvenient rows and quoting the
+        # remainder would flatter every model with an early cutoff.
+        "accuracy_committed": rate(
+            [r for r in scored if r["correct"] and r["predicted"] != DENIES_EXISTENCE],
+            [r for r in scored if r["predicted"] != DENIES_EXISTENCE],
+        ),
         "n_calls": len(rows),
         "rows": rows,
     }

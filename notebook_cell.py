@@ -591,36 +591,54 @@ PREAMBLE = (
 )
 
 
-def _token_cap(model_name: str) -> dict:
-    """Output-token cap, in whichever spelling the provider expects.
+# Candidate spellings for the output-token cap, in the order we try them.
+#
+# The Kaggle proxy fronts every vendor with one OpenAI-compatible surface
+# (`Completions.create()`), so the native Google spelling `max_output_tokens` is
+# rejected even for Gemini models. `max_tokens` is the OpenAI SDK parameter;
+# `max_completion_tokens` is its newer name. Trying both covers either SDK
+# version without caring which vendor is behind the proxy.
+#
+# This is not a tuning knob. The proxy reserves the worst-case cost of every
+# call from the output limit and refuses the call when that exceeds the
+# remaining daily quota. Unset, one call to a large model can reserve several
+# dollars against a $10 cap.
+_CAP_KEYS = ("max_tokens", "max_completion_tokens")
 
-    `prompt()` has no max-tokens parameter of its own; the limit goes through
-    `extra_api_params`, and the key is provider-specific. Google models take
-    `max_output_tokens`, OpenAI-compatible ones take `max_tokens`.
-
-    This is not a tuning knob. The Kaggle proxy reserves the worst-case cost of
-    every call from the output limit and refuses the call when that exceeds the
-    remaining daily quota. Unset, a single call to a large model can reserve
-    several dollars against a $10 cap.
-    """
-    name = (model_name or "").lower()
-    if name.startswith("google/") or "gemini" in name or "gemma" in name:
-        return {"max_output_tokens": MAX_TOKENS}
-    return {"max_tokens": MAX_TOKENS}
+# Set once per process, after the first successful call, so we do not pay for a
+# failed attempt on every single prompt.
+_WORKING_CAP_KEY: list = []
 
 
 def _ask(llm, question):
-    model_name = getattr(llm, "name", "") or getattr(llm, "model", "") or ""
     text = f"{PREAMBLE}\n\n{question}"
-    try:
-        return llm.prompt(text, extra_api_params=_token_cap(str(model_name)))
-    except Exception as exc:
-        # A provider that rejects the key would otherwise kill the whole run
-        # after burning most of it. Fall back uncapped and say so loudly.
-        if "max_" not in str(exc):
-            raise
-        print(f"  token cap rejected ({exc}); retrying uncapped")
-        return llm.prompt(text)
+
+    if _WORKING_CAP_KEY:
+        key = _WORKING_CAP_KEY[0]
+        if key is None:
+            return llm.prompt(text)
+        return llm.prompt(text, extra_api_params={key: MAX_TOKENS})
+
+    for key in _CAP_KEYS:
+        try:
+            out = llm.prompt(text, extra_api_params={key: MAX_TOKENS})
+        except TypeError as exc:
+            if "unexpected keyword argument" not in str(exc):
+                raise
+            continue
+        _WORKING_CAP_KEY.append(key)
+        print(f"  output cap set via extra_api_params={{{key!r}: {MAX_TOKENS}}}")
+        return out
+
+    # No spelling accepted. Running uncapped risks the reservation trap, so stop
+    # rather than quietly spending the daily quota a few calls at a time.
+    raise RuntimeError(
+        "Could not set an output-token cap: none of "
+        f"{_CAP_KEYS} was accepted. Running uncapped risks the proxy reserving "
+        "several dollars per call against the daily quota. Inspect "
+        "`inspect.signature(llm.prompt)` and the proxy's accepted parameters "
+        "before continuing."
+    )
 
 
 @kbench.task(name="deprecation_state")

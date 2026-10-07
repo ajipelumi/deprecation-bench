@@ -433,6 +433,11 @@ _DENIES_PAT = [
     r"\bnot a current, (?:distinct|user-configurable|directly settable)\b",
     r"\bis not current for\b",
     r"\bneither current, deprecated, nor removed\b",
+    r"\bnot (?:currently )?listed as\b",
+    r"\bis not (?:currently )?(?:a )?(?:distinct|separate|explicit)\b",
+    r"\bnot (?:a )?(?:distinct|separately branded|explicitly named)\b",
+    r"\bno (?:known|documented) \w+ (?:api )?(?:endpoint|setting|field)\b",
+    r"\bnot (?:a )?(?:current|currently) (?:publicly )?(?:available|documented|settable)\b",
     r"\bdoes not currently offer\b",
     r"\bare not current for\b",
     r"\bnot current for\b",
@@ -509,12 +514,38 @@ def _normalise(response):
     return t
 
 
+_CONCESSIVE = re.compile(
+    r"\b(?:however|that said|instead,|alternatively|but you can|"
+    r"to achieve this|if you want|for current|the current (?:method|way|approach)"
+    r"|while )",
+)
+
+
+def _primary_clause(text):
+    """Return the part of the response making the claim about the asked feature.
+
+    Only trims when the leading clause actually commits to something. A response
+    that opens with hedging and resolves after "however" keeps its full text.
+    """
+    m = _CONCESSIVE.search(text)
+    if not m or m.start() < 40:
+        return text
+    head = text[:m.start()]
+    committed = (
+        _any(_DENIES_PAT, head)
+        or _any(_REMOVED_PAT, head)
+        or _any(_DEPRECATED_PAT, head)
+        or _any(_LIVE_PAT, head)
+    )
+    return head if committed else text
+
+
 def classify(response: str) -> str:
     """Map a free-text response to a state. Order matters; see module docstring."""
     if not response or not response.strip():
         return UNCLEAR
 
-    t = _normalise(response)
+    t = _primary_clause(_normalise(response))
 
     negated = _any(_NEGATED, t)
     t_clean = t

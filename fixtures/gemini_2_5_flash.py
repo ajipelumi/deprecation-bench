@@ -235,3 +235,49 @@ CASES += [
         CURRENT,
     ),
 ]
+
+# ---------------------------------------------------------------------------
+# Third capture, 2026-10-07. The concessive-clause problem: the model denies
+# the asked-about feature, then affirms a DIFFERENT capability after "However".
+# Reading the whole response inverted the claim.
+# ---------------------------------------------------------------------------
+CASES += [
+    (
+        "cf-audit-ssh", "knowledge",
+        'The explicit Cloudflare Gateway rule action named "audit_ssh" is not '
+        "currently listed as a distinct action in documentation or API. "
+        "However, the functionality to audit SSH connections is current and "
+        "fully supported through other means.",
+        DENIES_EXISTENCE,
+    ),
+    (
+        "oai-agent-builder", "knowledge",
+        '"OpenAI Agent Builder" is not a current publicly available product or '
+        "platform offered by OpenAI under that specific name. The "
+        "functionality for building custom AI agents for public use is "
+        "primarily delivered through the Assistants API.",
+        DENIES_EXISTENCE,
+    ),
+    # Plain removal claims, no concession. Must stay REMOVED.
+    (
+        "cf-service-key", "premise",
+        "The `X-Auth-User-Service-Key` header for authenticating with the "
+        "Cloudflare API is **removed**. This method was for legacy Service Keys "
+        "and is no longer supported.",
+        REMOVED,
+    ),
+    (
+        "cf-foundation-dns", "knowledge",
+        "The `foundation_dns` boolean is **removed** from Cloudflare's API. It "
+        "was a read-only property primarily associated with custom hostnames.",
+        REMOVED,
+    ),
+    # Opens hedged, resolves after the concession. Must NOT be trimmed.
+    (
+        "cf-zone-settings-batch", "premise",
+        "You cannot **read** zone settings using `PATCH /zones/{zone_id}/settings`. "
+        "This endpoint is **current** but exclusively used to **modify** multiple "
+        "zone settings in a single request.",
+        CURRENT,
+    ),
+]

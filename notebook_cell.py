@@ -310,6 +310,65 @@ ITEMS = [
         aliases=["api token", "bearer"],
     ),
     Item(
+        id="cf-registrar-api",
+        vendor="Cloudflare",
+        feature="Registrar API (GET /accounts/{id}/registrar/registrations)",
+        truth=CURRENT,
+        knowledge_q=(
+            "Is GET /accounts/{account_id}/registrar/registrations the current "
+            "Cloudflare API for listing domain registrations? Answer in one "
+            "short paragraph."
+        ),
+        premise_q=(
+            "Show me how to list Cloudflare domain registrations using "
+            "GET /accounts/{account_id}/registrar/registrations."
+        ),
+        replacement="n/a, this is the current approach",
+        announced="",
+        end_of_life="",
+        bucket="recent",
+        source=CF_DEPRECATIONS,
+        quote=(
+            "Replacement: Registrar API ... List registrations - "
+            "GET /accounts/{account_id}/registrar/registrations"
+        ),
+        notes=(
+            "Named on the deprecation page as the replacement for the Legacy "
+            "Registrar Domain Management API, which ended 27 Sep 2026. No "
+            "pending rollout, unlike cf-advanced-nameservers."
+        ),
+        aliases=["registrar", "registrations"],
+    ),
+    Item(
+        id="cf-access-for-infrastructure",
+        vendor="Cloudflare",
+        feature="SSH with Access for Infrastructure",
+        truth=CURRENT,
+        knowledge_q=(
+            "Is SSH with Access for Infrastructure the current Cloudflare way "
+            "to manage and audit SSH access? Answer in one short paragraph."
+        ),
+        premise_q=(
+            "Show me how to audit SSH access in Cloudflare using Access for "
+            "Infrastructure."
+        ),
+        replacement="n/a, this is the current approach",
+        announced="",
+        end_of_life="",
+        bucket="recent",
+        source=CF_DEPRECATIONS,
+        quote=(
+            "SSH with Access for Infrastructure is the replacement for managing "
+            "and auditing SSH access."
+        ),
+        notes=(
+            "Pairs with cf-audit-ssh: the model should call the old action dead "
+            "and this one live. Getting both right needs the distinction, not "
+            "just a blanket posture toward Cloudflare SSH features."
+        ),
+        aliases=["access for infrastructure", "infrastructure"],
+    ),
+    Item(
         id="cf-per-setting",
         vendor="Cloudflare",
         feature="Per-setting zone endpoints /zones/{id}/settings/{setting_id}",
@@ -332,37 +391,7 @@ ITEMS = [
         ),
         aliases=["setting_id"],
     ),
-    Item(
-        id="cf-advanced-nameservers",
-        vendor="Cloudflare",
-        feature='nameservers.type: "cloudflare.advanced"',
-        truth=CURRENT,
-        knowledge_q=(
-            'Is nameservers.type set to "cloudflare.advanced" the current way to '
-            "configure Advanced Nameservers on Cloudflare? Answer in one short "
-            "paragraph."
-        ),
-        premise_q=(
-            'Show me the Cloudflare API call that configures Advanced Nameservers '
-            'using nameservers.type "cloudflare.advanced".'
-        ),
-        replacement="n/a, this is the current approach",
-        announced="",
-        end_of_life="",
-        bucket="fresh",
-        source=CF_DEPRECATIONS,
-        quote=(
-            'Use nameservers.type: "cloudflare.advanced" to configure Advanced '
-            "Nameservers instead."
-        ),
-        notes=(
-            "Rollout began 2026-10-26 per the vendor page, which is after AS_OF. "
-            "Treated as CURRENT because it is the documented forward path and the "
-            "API accepts it for entitled accounts during rollout. Flagged here "
-            "because it is the softest ground truth in the set."
-        ),
-        aliases=["cloudflare.advanced", "advanced nameservers"],
-    ),
+
 ]
 
 
@@ -396,6 +425,14 @@ _DENIES_PAT = [
     r"\bis not (?:a )?current(?:ly)? (?:feature|way|functionality)\b",
     r"\bnot a current feature\b",
     r"\bis not a current\b",
+    r"\bis\s+(?:\*\*)?not current(?:\*\*)?\s*[.,;]",
+    r"\bis\s+not current\s*$",
+    r"\bnon-?existent\b",
+    r"\bis not a (?:standard|recognized|documented|distinct|named)\b",
+    r"\bnot a (?:standard|recognized|documented|publicly branded)\b",
+    r"\bnot a current, (?:distinct|user-configurable|directly settable)\b",
+    r"\bis not current for\b",
+    r"\bneither current, deprecated, nor removed\b",
     r"\bdoes not currently offer\b",
     r"\bare not current for\b",
     r"\bnot current for\b",

@@ -58,6 +58,16 @@ _DENIES_PAT = [
     r"\bis not (?:a )?current(?:ly)? (?:feature|way|functionality)\b",
     r"\bnot a current feature\b",
     r"\bis not a current\b",
+    # Bare "is not current" with no trailing qualifier. Models end sentences
+    # here constantly and the earlier patterns all required something after it.
+    r"\bis\s+(?:\*\*)?not current(?:\*\*)?\s*[.,;]",
+    r"\bis\s+not current\s*$",
+    r"\bnon-?existent\b",
+    r"\bis not a (?:standard|recognized|documented|distinct|named)\b",
+    r"\bnot a (?:standard|recognized|documented|publicly branded)\b",
+    r"\bnot a current, (?:distinct|user-configurable|directly settable)\b",
+    r"\bis not current for\b",
+    r"\bneither current, deprecated, nor removed\b",
     r"\bdoes not currently offer\b",
     r"\bare not current for\b",
     r"\bnot current for\b",

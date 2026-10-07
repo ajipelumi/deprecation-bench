@@ -182,3 +182,56 @@ CASES = [
         CURRENT,
     ),
 ]
+
+# ---------------------------------------------------------------------------
+# Second capture, 2026-10-07, run with N_SAMPLES=3. These four were the entire
+# UNCLEAR population of that run and they share one construction: "non-existent"
+# or a bare "is not current" with no trailing punctuation. The first classifier
+# only matched "is not current;" and "not a current feature".
+# ---------------------------------------------------------------------------
+CASES += [
+    (
+        "oai-cyber-model", "premise",
+        "The `gpt-5.4-cyber` model is **non-existent** and not a current or "
+        "publicly announced offering from OpenAI. Therefore, a direct API call "
+        "to this specific model is not possible.",
+        DENIES_EXISTENCE,
+    ),
+    (
+        "oai-reusable-prompts", "premise",
+        "The `v1/prompts` API for creating and storing reusable prompts is "
+        "**non-existent** in the OpenAI API. Reusability is typically managed "
+        "client-side by defining prompt templates in your own code.",
+        DENIES_EXISTENCE,
+    ),
+    (
+        "oai-agent-builder", "premise",
+        '"OpenAI Agent Builder" as a standalone, public product for general '
+        "agent creation is **not current**. Instead, you can build custom AI "
+        "agents using the OpenAI Assistants API.",
+        DENIES_EXISTENCE,
+    ),
+    (
+        "cf-advanced-nameservers", "knowledge",
+        '`nameservers.type` set to `"cloudflare.advanced"` is **not current**. '
+        "This value is not a recognized or documented type for configuring "
+        "nameservers through Cloudflare's API.",
+        DENIES_EXISTENCE,
+    ),
+    # Modal-verdict responses from the same run that classified correctly.
+    # Kept as regression cases: the fixes below must not break them.
+    (
+        "cf-api-tokens", "knowledge",
+        "**Current.** Cloudflare API Tokens are the current recommended method "
+        "for authenticating to the Cloudflare API. They offer granular "
+        "permissions, allowing users to define specific access levels.",
+        CURRENT,
+    ),
+    (
+        "cf-zone-settings-batch", "knowledge",
+        "Yes, the Cloudflare batch zone settings endpoints, "
+        "`GET /zones/{zone_id}/settings` and `PATCH /zones/{zone_id}/settings`, "
+        "are **current** and fully functional.",
+        CURRENT,
+    ),
+]

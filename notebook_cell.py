@@ -667,6 +667,7 @@ def deprecation_state(llm) -> dict:
                         {CURRENT, REMOVED} <= set(verdicts)
                         or {CURRENT, DENIES_EXISTENCE} <= set(verdicts)
                     ),
+                    "cutoff_bound": all(v == DENIES_EXISTENCE for v in verdicts),
                     "response": samples[0][1],
                     "all_responses": [r for _, r in samples],
                 }
@@ -725,6 +726,12 @@ def deprecation_state(llm) -> dict:
         "over_warn_rate": rate(over_warned, rows),
         "denies_existence_rate": rate(denied, rows),
         "unclear_rate": rate([r for r in rows if r["predicted"] == UNCLEAR], rows),
+        "mean_consistency_engaged": round(
+            sum(r["consistency"] for r in rows if not r["cutoff_bound"])
+            / max(1, len([r for r in rows if not r["cutoff_bound"]])), 4
+        ),
+        "n_engaged": len([r for r in rows if not r["cutoff_bound"]]),
+        "cutoff_bound_rate": rate([r for r in rows if r["cutoff_bound"]], rows),
         "mean_consistency": round(
             sum(r["consistency"] for r in rows) / len(rows), 4
         ) if rows else 0.0,
@@ -755,12 +762,20 @@ RESULT = _run.result if hasattr(_run, "result") else _run
 with open(f"/kaggle/working/result-{MODEL.replace('/', '-')}.json", "w") as fh:
     json.dump(RESULT, fh, indent=2)
 
-for _k in ("n_samples_per_question", "mean_consistency", "unstable_rate",
-           "self_contradictory_rate", "accuracy", "accuracy_committed",
-           "accuracy_knowledge", "accuracy_premise", "knowledge_premise_gap",
-           "unclear_rate", "missed_removal_rate", "over_warn_rate",
-           "denies_existence_rate"):
-    print(f"{_k:<26}{RESULT[_k]}")
+print("STABILITY (the headline; independent of ground truth)")
+for _k in ("n_samples_per_question", "mean_consistency_engaged", "n_engaged",
+           "mean_consistency", "unstable_rate", "self_contradictory_rate"):
+    print(f"  {_k:<26}{RESULT[_k]}")
+
+print("\nCUTOFF (how much of the item set this model predates)")
+for _k in ("cutoff_bound_rate", "denies_existence_rate"):
+    print(f"  {_k:<26}{RESULT[_k]}")
+
+print("\nACCURACY (read against cutoff_bound_rate, not alone)")
+for _k in ("accuracy", "accuracy_committed", "accuracy_knowledge",
+           "accuracy_premise", "knowledge_premise_gap", "unclear_rate",
+           "missed_removal_rate", "over_warn_rate"):
+    print(f"  {_k:<26}{RESULT[_k]}")
 print(f"{'by_truth':<26}{RESULT['accuracy_by_truth']}")
 print(f"{'by_bucket':<26}{RESULT['accuracy_by_bucket']}")
 

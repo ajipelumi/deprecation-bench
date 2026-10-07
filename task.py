@@ -179,6 +179,13 @@ def deprecation_state(llm) -> dict:
                         {CURRENT, REMOVED} <= set(verdicts)
                         or {CURRENT, DENIES_EXISTENCE} <= set(verdicts)
                     ),
+                    # Every sample denied the feature ever existed. Almost
+                    # certainly the model's training predates it, so scoring it
+                    # against the item's truth measures the cutoff rather than
+                    # anything about deprecation awareness. Reported separately
+                    # rather than dropped: a model that cannot know is a fact
+                    # about the lineup, not an inconvenience to hide.
+                    "cutoff_bound": all(v == DENIES_EXISTENCE for v in verdicts),
                     "response": samples[0][1],
                     "all_responses": [r for _, r in samples],
                 }
@@ -253,6 +260,16 @@ def deprecation_state(llm) -> dict:
         # Stability. mean_consistency is the headline: 1.0 means every question
         # got the same answer on every sample. Anything well below that means
         # single-sample numbers from this benchmark, or any like it, are noise.
+        # Instability measured only over questions the model engaged with.
+        # DENIES_EXISTENCE answers are driven by training cutoff, so a model
+        # that consistently denies everything would otherwise look admirably
+        # stable. This is the honest version of the headline number.
+        "mean_consistency_engaged": round(
+            sum(r["consistency"] for r in rows if not r["cutoff_bound"])
+            / max(1, len([r for r in rows if not r["cutoff_bound"]])), 4
+        ),
+        "n_engaged": len([r for r in rows if not r["cutoff_bound"]]),
+        "cutoff_bound_rate": rate([r for r in rows if r["cutoff_bound"]], rows),
         "mean_consistency": round(
             sum(r["consistency"] for r in rows) / len(rows), 4
         ) if rows else 0.0,

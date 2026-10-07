@@ -72,12 +72,20 @@ RESULT = _run.result if hasattr(_run, "result") else _run
 with open(f"/kaggle/working/result-{MODEL.replace('/', '-')}.json", "w") as fh:
     json.dump(RESULT, fh, indent=2)
 
-for _k in ("n_samples_per_question", "mean_consistency", "unstable_rate",
-           "self_contradictory_rate", "accuracy", "accuracy_committed",
-           "accuracy_knowledge", "accuracy_premise", "knowledge_premise_gap",
-           "unclear_rate", "missed_removal_rate", "over_warn_rate",
-           "denies_existence_rate"):
-    print(f"{_k:<26}{RESULT[_k]}")
+print("STABILITY (the headline; independent of ground truth)")
+for _k in ("n_samples_per_question", "mean_consistency_engaged", "n_engaged",
+           "mean_consistency", "unstable_rate", "self_contradictory_rate"):
+    print(f"  {_k:<26}{RESULT[_k]}")
+
+print("\\nCUTOFF (how much of the item set this model predates)")
+for _k in ("cutoff_bound_rate", "denies_existence_rate"):
+    print(f"  {_k:<26}{RESULT[_k]}")
+
+print("\\nACCURACY (read against cutoff_bound_rate, not alone)")
+for _k in ("accuracy", "accuracy_committed", "accuracy_knowledge",
+           "accuracy_premise", "knowledge_premise_gap", "unclear_rate",
+           "missed_removal_rate", "over_warn_rate"):
+    print(f"  {_k:<26}{RESULT[_k]}")
 print(f"{'by_truth':<26}{RESULT['accuracy_by_truth']}")
 print(f"{'by_bucket':<26}{RESULT['accuracy_by_bucket']}")
 

@@ -13,18 +13,32 @@ SWEEP = [
     # One per vendor, mixing dated pins and @default tags. Dated pins have
     # knowable cutoffs, which matters when the finding is about what a model
     # does outside its training window.
+    #
+    # gemini-2.5-flash is listed twice on purpose, as the first and last entry.
+    # Three separate runs of it produced unstable_rate 0.731, 0.654 and 0.769
+    # with cutoff_bound_rate swinging 0.385 to 0.077, so the aggregate metrics
+    # are themselves unstable across runs. Running the same model at both ends
+    # of the sweep gives a within-sweep estimate of that noise floor, and no
+    # cross-model difference smaller than the gap between those two entries
+    # should be treated as real.
     "google/gemini-2.5-flash",
     "google/gemini-3.8-flash",
     "anthropic/claude-haiku-4-5@20251001",
     "anthropic/claude-sonnet-5@default",
     "openai/gpt-5.4-mini-2026-03-17",
     "qwen/qwen3-next-80b-a3b-instruct",
+    "google/gemini-2.5-flash#repeat",
 ]
 
 results = {}
 
 for slug in SWEEP:
-    if slug not in kbench.llms:
+    # "#repeat" marks a deliberate re-run of a model already in the sweep. The
+    # registry knows nothing about it, so strip it for lookup and keep it for
+    # labelling and the output filename.
+    model = slug.split("#")[0]
+
+    if model not in kbench.llms:
         print(f"SKIP {slug}: not in registry")
         continue
 
@@ -34,7 +48,7 @@ for slug in SWEEP:
 
     print(f"\n=== {slug} ===", flush=True)
     try:
-        run = deprecation_state.run(llm=kbench.llms[slug])
+        run = deprecation_state.run(llm=kbench.llms[model])
         res = run.result if hasattr(run, "result") else run
     except Exception as exc:
         # One vendor failing should not cost the whole sweep.
@@ -42,11 +56,13 @@ for slug in SWEEP:
         traceback.print_exc(limit=1)
         continue
 
-    res["model"] = slug
+    res["model"] = model
+    res["label"] = slug
     res["as_of"] = AS_OF
     results[slug] = res
 
-    with open(f"/kaggle/working/result-{slug.replace('/', '-')}.json", "w") as fh:
+    _fname = slug.replace("/", "-").replace("#", "-")
+    with open(f"/kaggle/working/result-{_fname}.json", "w") as fh:
         json.dump(res, fh, indent=2)
 
     print(f"  engaged={res['n_engaged']}/{res['n_calls']} "

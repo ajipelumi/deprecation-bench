@@ -1,19 +1,15 @@
-"""Ground truth for the deprecation benchmark.
+"""Ground truth, every item quoting a vendor deprecation page.
 
-Every item traces to a vendor deprecation page, quoted in `source`. Nothing here
-comes from a secondary summary: announcement dates and end-of-life dates are
-different fields and conflating them is the exact error this benchmark measures.
+    REMOVED          end of life passed, using it fails
+    DEPRECATED_LIVE  announced, still functional
+    CURRENT          the documented replacement
 
-States:
-    REMOVED          end of life has passed. Using the feature fails.
-    DEPRECATED_LIVE  announced deprecated, still functional. A warning is correct,
-                     calling it broken is not.
-    CURRENT          the documented replacement. Fine to use.
+Announcement date and end-of-life date are separate fields. Conflating them is
+the error this benchmark measures, so the item set does not make it.
 
-`bucket` splits items by how long the fact has been true, so that a model which
-cannot know a recent change is scored separately from one that should know an old
-one. Training cutoffs differ across vendors; without this split that difference
-reads as a capability difference, which it is not.
+`bucket` splits items by how settled the fact is, so a model that cannot know a
+recent change is scored apart from one that should know an old one. Without it,
+differing training cutoffs read as differing capability.
 """
 
 from dataclasses import dataclass, field
@@ -424,20 +420,10 @@ if __name__ == "__main__":
     print("\nall ground-truth assertions passed")
 
 
-# ---------------------------------------------------------------------------
-# WITHDRAWN 2026-10-07: cf-advanced-nameservers
-#
-# Scored as CURRENT, but the vendor page says the rollout representing Advanced
-# Nameservers with nameservers.type: "cloudflare.advanced" only *begins*
-# 26 October 2026, and before it reaches an account the API still returns
-# "cloudflare.standard". The value is accepted "for entitled accounts
-# throughout the rollout", which is not the same as being the current documented
-# way to configure them.
-#
-# Gemini said, with consistency 1.0, that it "is a property that Cloudflare
-# returns ... not a configurable input parameter for a zone". That is defensible
-# on today's reading of the page. The item was flagged in its own notes as the
-# softest ground truth in the set, and it should have been cut then rather than
-# scored. Marking a model wrong against a fact that is not yet true would be the
-# same error this benchmark exists to measure.
-# ---------------------------------------------------------------------------
+# WITHDRAWN 2026-10-07: cf-advanced-nameservers. Scored CURRENT, but the vendor
+# page says the rollout representing Advanced Nameservers with
+# nameservers.type: "cloudflare.advanced" only BEGINS 26 Oct 2026, and until it
+# reaches an account the API still returns "cloudflare.standard". Gemini said at
+# consistency 1.0 that the value is returned, not configurable, which is
+# defensible on today's page. Marking a model wrong against a fact that is not
+# yet true is the error this benchmark exists to measure.

@@ -522,10 +522,10 @@ _CONCESSIVE = re.compile(
 
 
 def _primary_clause(text):
-    """Return the part of the response making the claim about the asked feature.
+    """The clause making the claim about the asked feature.
 
-    Only trims when the leading clause actually commits to something. A response
-    that opens with hedging and resolves after "however" keeps its full text.
+    Trims only when the leading clause already commits, so a response that
+    opens hedged and resolves after "however" keeps its full text.
     """
     m = _CONCESSIVE.search(text)
     if not m or m.start() < 40:
@@ -582,17 +582,15 @@ def classify(response: str) -> str:
 
 """Deprecation state benchmark: does the model know what still works?
 
-Three states, not two. A feature can be removed, deprecated-but-functional, or
-current. Most evals of this shape collapse the middle state, which hides two
-opposite failures: treating a live-but-deprecated feature as broken, and treating
-a removed one as fine.
+Four states. A feature is removed, deprecated-but-functional, or current;
+DENIES_EXISTENCE is the model's state, not the feature's, for when it reports
+something never existed. Collapsing the middle feature state hides two opposite
+failures: calling a live feature broken, and calling a removed one fine.
 
-Two question forms per item:
-  knowledge  a neutral question about the feature's state
-  premise    a request that assumes the feature is usable
-
-The gap between them is the point. A model can know a feature is gone and still
-write the code when asked directly.
+Each item is asked twice, neutrally and in a form that assumes the feature
+works, and each question is sampled N_SAMPLES times. The headline is stability:
+the library's temperature setting does not reach the provider, so a single
+response is one draw from a distribution rather than a measurement.
 
 Run locally with `python task.py` to validate before pushing.
 """
@@ -607,33 +605,25 @@ PREAMBLE = (
     "removed, deprecated, or current, say so explicitly."
 )
 
-
 _CAP_KEYS = ("max_tokens", "max_completion_tokens")
-
-_WORKING_CAP_KEY: list = []
+_WORKING_CAP_KEY: list = []  # negotiated once, then reused
 
 
 def _ask(llm, question):
     """One question, one isolated conversation.
 
-    `llm.prompt()` accumulates history by default, which would break this
-    benchmark two ways. Items would see each other's answers, so a model primed
-    by three deprecation questions would answer the fourth differently and the
-    measurement would depend on item order. Worse, a reasoning model that spends
-    its whole output budget thinking returns an empty message, and that empty
-    turn stays in history: the next call then ships a message with no parts and
-    the provider rejects the whole request. One empty response would kill the
-    run.
-
-    `kbench.chats.new()` gives each call a clean slate, so items are independent
-    and an empty response costs one row instead of the run.
+    prompt() accumulates history by default, which breaks this two ways. Items
+    would see each other's answers, making scores depend on item order. And an
+    empty response stays in history, so the next call ships a message with no
+    parts and the provider rejects it, killing the run.
     """
     text = f"{PREAMBLE}\n\n{question}"
 
     def _send():
         if _WORKING_CAP_KEY:
-            key = _WORKING_CAP_KEY[0]
-            return llm.prompt(text, extra_api_params={key: MAX_TOKENS})
+            return llm.prompt(
+                text, extra_api_params={_WORKING_CAP_KEY[0]: MAX_TOKENS}
+            )
 
         for key in _CAP_KEYS:
             try:
@@ -647,11 +637,9 @@ def _ask(llm, question):
             return out
 
         raise RuntimeError(
-            "Could not set an output-token cap: none of "
-            f"{_CAP_KEYS} was accepted. Running uncapped risks the proxy "
-            "reserving several dollars per call against the daily quota. "
-            "Inspect `inspect.signature(llm.prompt)` and the proxy's accepted "
-            "parameters before continuing."
+            f"Could not set an output-token cap: none of {_CAP_KEYS} was "
+            "accepted. Running uncapped risks the proxy reserving several "
+            "dollars per call. Inspect inspect.signature(llm.prompt) first."
         )
 
     with kbench.chats.new("item"):
@@ -735,6 +723,8 @@ def deprecation_state(llm) -> dict:
         pool = [r for r in rows if r["truth"] == state]
         by_truth[state] = rate([r for r in pool if r["correct"]], pool)
 
+    engaged = [r for r in rows if not r["cutoff_bound"]]
+
     kbench.assertions.assert_true(
         len(scored) >= len(rows) * 0.6,
         expectation=(
@@ -745,7 +735,28 @@ def deprecation_state(llm) -> dict:
     )
 
     return {
+        "mean_consistency_engaged": round(
+            sum(r["consistency"] for r in engaged) / max(1, len(engaged)), 4
+        ),
+        "n_engaged": len(engaged),
+        "mean_consistency": round(
+            sum(r["consistency"] for r in rows) / len(rows), 4
+        ) if rows else 0.0,
+        "unstable_rate": rate([r for r in rows if r["consistency"] < 1.0], rows),
+        "self_contradictory_rate": rate(
+            [r for r in rows if r["self_contradictory"]], rows
+        ),
+        "n_samples_per_question": N_SAMPLES,
+
+        "cutoff_bound_rate": rate([r for r in rows if r["cutoff_bound"]], rows),
+        "denies_existence_rate": rate(denied, rows),
+
         "accuracy": rate(correct, rows),
+        "accuracy_committed": rate(
+            [r for r in scored
+             if r["correct"] and r["predicted"] != DENIES_EXISTENCE],
+            [r for r in scored if r["predicted"] != DENIES_EXISTENCE],
+        ),
         "accuracy_knowledge": by_form["knowledge"],
         "accuracy_premise": by_form["premise"],
         "knowledge_premise_gap": round(
@@ -755,26 +766,8 @@ def deprecation_state(llm) -> dict:
         "accuracy_by_truth": by_truth,
         "missed_removal_rate": rate(missed_removal, rows),
         "over_warn_rate": rate(over_warned, rows),
-        "denies_existence_rate": rate(denied, rows),
         "unclear_rate": rate([r for r in rows if r["predicted"] == UNCLEAR], rows),
-        "mean_consistency_engaged": round(
-            sum(r["consistency"] for r in rows if not r["cutoff_bound"])
-            / max(1, len([r for r in rows if not r["cutoff_bound"]])), 4
-        ),
-        "n_engaged": len([r for r in rows if not r["cutoff_bound"]]),
-        "cutoff_bound_rate": rate([r for r in rows if r["cutoff_bound"]], rows),
-        "mean_consistency": round(
-            sum(r["consistency"] for r in rows) / len(rows), 4
-        ) if rows else 0.0,
-        "unstable_rate": rate([r for r in rows if r["consistency"] < 1.0], rows),
-        "self_contradictory_rate": rate(
-            [r for r in rows if r["self_contradictory"]], rows
-        ),
-        "n_samples_per_question": N_SAMPLES,
-        "accuracy_committed": rate(
-            [r for r in scored if r["correct"] and r["predicted"] != DENIES_EXISTENCE],
-            [r for r in scored if r["predicted"] != DENIES_EXISTENCE],
-        ),
+
         "n_calls": len(rows),
         "rows": rows,
     }

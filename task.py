@@ -1,17 +1,15 @@
 # %%
 """Deprecation state benchmark: does the model know what still works?
 
-Three states, not two. A feature can be removed, deprecated-but-functional, or
-current. Most evals of this shape collapse the middle state, which hides two
-opposite failures: treating a live-but-deprecated feature as broken, and treating
-a removed one as fine.
+Four states. A feature is removed, deprecated-but-functional, or current;
+DENIES_EXISTENCE is the model's state, not the feature's, for when it reports
+something never existed. Collapsing the middle feature state hides two opposite
+failures: calling a live feature broken, and calling a removed one fine.
 
-Two question forms per item:
-  knowledge  a neutral question about the feature's state
-  premise    a request that assumes the feature is usable
-
-The gap between them is the point. A model can know a feature is gone and still
-write the code when asked directly.
+Each item is asked twice, neutrally and in a form that assumes the feature
+works, and each question is sampled N_SAMPLES times. The headline is stability:
+the library's temperature setting does not reach the provider, so a single
+response is one draw from a distribution rather than a measurement.
 
 Run locally with `python task.py` to validate before pushing.
 """
@@ -34,75 +32,45 @@ from classify import (  # noqa: E402
 )
 from items import ITEMS  # noqa: E402
 
-# The proxy reserves worst-case cost per call from the output-token limit. Left
-# unset, a single call to an expensive model can reserve several dollars against
-# a $10 daily quota and then be refused. This cap is not a nicety.
+# The proxy reserves worst-case cost per call from this limit and refuses the
+# call when the reservation exceeds the remaining daily quota. Unset, one call
+# to a large model can reserve several dollars against a $10 cap. 1024 was too
+# low: a reasoning model spent the whole budget thinking and returned nothing.
 MAX_TOKENS = 4096
 
-# Samples per question. One is not a measurement.
-#
-# The library's prompt() signature reads `temperature: float = 0`, but
-# actors/llms.py sends `temperature if self.support_temperature else None`, and
-# support_temperature defaults to False. So temperature is never sent and the
-# provider's own default applies, which for Gemini is around 1.0. Two runs of
-# this benchmark produced opposite answers to the same question: cf-audit-ssh
-# went from "is current, you can still enable this" to "no, you can no longer
-# create these rules".
-#
-# With sampling in play, a single response per item measures one draw from a
-# distribution, not the model's knowledge. Repeating each question lets the
-# instability itself be reported, which is the more interesting result: being
-# wrong is ordinary, being wrong in both directions at once is not.
+# prompt() advertises temperature=0, but actors/llms.py sends
+# `temperature if self.support_temperature else None` and support_temperature
+# defaults to False, so the provider default applies. Runs are not
+# deterministic, and one sample per question is not a measurement.
 N_SAMPLES = 3
 
-# Asking for a short answer keeps cost down and makes classification cleaner:
-# long answers hedge in both directions and land in UNCLEAR.
 PREAMBLE = (
     "Answer in at most three sentences. If the feature you are asked about is "
     "removed, deprecated, or current, say so explicitly."
 )
 
-
-# Candidate spellings for the output-token cap, in the order we try them.
-#
-# The Kaggle proxy fronts every vendor with one OpenAI-compatible surface
-# (`Completions.create()`), so the native Google spelling `max_output_tokens` is
-# rejected even for Gemini models. `max_tokens` is the OpenAI SDK parameter;
-# `max_completion_tokens` is its newer name. Trying both covers either SDK
-# version without caring which vendor is behind the proxy.
-#
-# This is not a tuning knob. The proxy reserves the worst-case cost of every
-# call from the output limit and refuses the call when that exceeds the
-# remaining daily quota. Unset, one call to a large model can reserve several
-# dollars against a $10 cap.
+# The Kaggle proxy fronts every vendor with one OpenAI-compatible
+# Completions.create(), so the native Google spelling max_output_tokens is
+# rejected even for Gemini. Try both OpenAI spellings, old and new.
 _CAP_KEYS = ("max_tokens", "max_completion_tokens")
-
-# Set once per process, after the first successful call, so we do not pay for a
-# failed attempt on every single prompt.
-_WORKING_CAP_KEY: list = []
+_WORKING_CAP_KEY: list = []  # negotiated once, then reused
 
 
 def _ask(llm, question):
     """One question, one isolated conversation.
 
-    `llm.prompt()` accumulates history by default, which would break this
-    benchmark two ways. Items would see each other's answers, so a model primed
-    by three deprecation questions would answer the fourth differently and the
-    measurement would depend on item order. Worse, a reasoning model that spends
-    its whole output budget thinking returns an empty message, and that empty
-    turn stays in history: the next call then ships a message with no parts and
-    the provider rejects the whole request. One empty response would kill the
-    run.
-
-    `kbench.chats.new()` gives each call a clean slate, so items are independent
-    and an empty response costs one row instead of the run.
+    prompt() accumulates history by default, which breaks this two ways. Items
+    would see each other's answers, making scores depend on item order. And an
+    empty response stays in history, so the next call ships a message with no
+    parts and the provider rejects it, killing the run.
     """
     text = f"{PREAMBLE}\n\n{question}"
 
     def _send():
         if _WORKING_CAP_KEY:
-            key = _WORKING_CAP_KEY[0]
-            return llm.prompt(text, extra_api_params={key: MAX_TOKENS})
+            return llm.prompt(
+                text, extra_api_params={_WORKING_CAP_KEY[0]: MAX_TOKENS}
+            )
 
         for key in _CAP_KEYS:
             try:
@@ -115,23 +83,17 @@ def _ask(llm, question):
             print(f"  output cap set via extra_api_params={{{key!r}: {MAX_TOKENS}}}")
             return out
 
-        # No spelling accepted. Running uncapped risks the reservation trap, so
-        # stop rather than quietly spending the daily quota a few calls at a time.
+        # Stop rather than spend the daily quota a few uncapped calls at a time.
         raise RuntimeError(
-            "Could not set an output-token cap: none of "
-            f"{_CAP_KEYS} was accepted. Running uncapped risks the proxy "
-            "reserving several dollars per call against the daily quota. "
-            "Inspect `inspect.signature(llm.prompt)` and the proxy's accepted "
-            "parameters before continuing."
+            f"Could not set an output-token cap: none of {_CAP_KEYS} was "
+            "accepted. Running uncapped risks the proxy reserving several "
+            "dollars per call. Inspect inspect.signature(llm.prompt) first."
         )
 
     with kbench.chats.new("item"):
         try:
             return _send() or ""
         except Exception as exc:
-            # An empty completion from a reasoning model that spent its budget
-            # thinking surfaces here. Record it as an unusable response rather
-            # than losing every item after it.
             if "parts field" in str(exc) or "message=None" in str(exc):
                 print(f"  empty response, scored UNCLEAR: {str(exc)[:90]}")
                 return ""
@@ -163,28 +125,21 @@ def deprecation_state(llm) -> dict:
                     "bucket": item.bucket,
                     "form": form,
                     "truth": item.truth,
-                    # The modal verdict across samples, not a single draw.
                     "predicted": modal,
                     "correct": modal == item.truth,
-                    # Fraction of samples agreeing with the mode. 1.0 means the
-                    # model said the same thing every time; 0.34 at N=3 means it
-                    # said three different things.
+                    # 1.0 = same answer every sample. 0.333 at N=3 = three
+                    # different answers.
                     "consistency": round(modal_n / len(verdicts), 4),
                     "verdicts": verdicts,
                     "distinct_verdicts": len(tally),
-                    # Did the model contradict itself about whether the feature
-                    # works at all? CURRENT and REMOVED are not degrees of the
-                    # same answer, they are opposites.
+                    # CURRENT and REMOVED are opposites, not degrees.
                     "self_contradictory": bool(
                         {CURRENT, REMOVED} <= set(verdicts)
                         or {CURRENT, DENIES_EXISTENCE} <= set(verdicts)
                     ),
-                    # Every sample denied the feature ever existed. Almost
-                    # certainly the model's training predates it, so scoring it
-                    # against the item's truth measures the cutoff rather than
-                    # anything about deprecation awareness. Reported separately
-                    # rather than dropped: a model that cannot know is a fact
-                    # about the lineup, not an inconvenience to hide.
+                    # Denied on every sample: the model's training almost
+                    # certainly predates the feature, so scoring it against
+                    # truth measures the cutoff, not deprecation awareness.
                     "cutoff_bound": all(v == DENIES_EXISTENCE for v in verdicts),
                     "response": samples[0][1],
                     "all_responses": [r for _, r in samples],
@@ -194,18 +149,9 @@ def deprecation_state(llm) -> dict:
     scored = [r for r in rows if r["predicted"] != UNCLEAR]
     correct = [r for r in rows if r["correct"]]
 
-    # The failures worth naming separately.
-    #
-    # missed_removal is the dangerous one: the model hands you code for a feature
-    # that no longer works.
-    #
-    # over_warn is its mirror: calling a live feature dead. Cheaper, but a model
-    # that cries deprecation at everything cannot be trusted when it is right.
-    #
-    # denies_existence is neither. It means the model's training predates the
-    # feature, so it reports the feature was never real. That is a cutoff
-    # artefact, not a knowledge failure, and conflating it with either of the
-    # above would misreport what the model got wrong.
+    # missed_removal hands you code that cannot run. over_warn sends you on a
+    # migration you did not need. Scored as one number, a uniformly pessimistic
+    # model looks good.
     missed_removal = [
         r for r in rows
         if r["truth"] == REMOVED and r["predicted"] in (CURRENT, DEPRECATED_LIVE)
@@ -234,6 +180,8 @@ def deprecation_state(llm) -> dict:
         pool = [r for r in rows if r["truth"] == state]
         by_truth[state] = rate([r for r in pool if r["correct"]], pool)
 
+    engaged = [r for r in rows if not r["cutoff_bound"]]
+
     kbench.assertions.assert_true(
         len(scored) >= len(rows) * 0.6,
         expectation=(
@@ -244,32 +192,13 @@ def deprecation_state(llm) -> dict:
     )
 
     return {
-        "accuracy": rate(correct, rows),
-        "accuracy_knowledge": by_form["knowledge"],
-        "accuracy_premise": by_form["premise"],
-        # The headline number: knowing minus acting on it.
-        "knowledge_premise_gap": round(
-            by_form["knowledge"] - by_form["premise"], 4
-        ),
-        "accuracy_by_bucket": by_bucket,
-        "accuracy_by_truth": by_truth,
-        "missed_removal_rate": rate(missed_removal, rows),
-        "over_warn_rate": rate(over_warned, rows),
-        "denies_existence_rate": rate(denied, rows),
-        "unclear_rate": rate([r for r in rows if r["predicted"] == UNCLEAR], rows),
-        # Stability. mean_consistency is the headline: 1.0 means every question
-        # got the same answer on every sample. Anything well below that means
-        # single-sample numbers from this benchmark, or any like it, are noise.
-        # Instability measured only over questions the model engaged with.
-        # DENIES_EXISTENCE answers are driven by training cutoff, so a model
-        # that consistently denies everything would otherwise look admirably
-        # stable. This is the honest version of the headline number.
+        # Stability. mean_consistency_engaged is the headline: a model that
+        # denies everything scores 1.0 on the unfiltered version while
+        # answering nothing, so read it with n_engaged.
         "mean_consistency_engaged": round(
-            sum(r["consistency"] for r in rows if not r["cutoff_bound"])
-            / max(1, len([r for r in rows if not r["cutoff_bound"]])), 4
+            sum(r["consistency"] for r in engaged) / max(1, len(engaged)), 4
         ),
-        "n_engaged": len([r for r in rows if not r["cutoff_bound"]]),
-        "cutoff_bound_rate": rate([r for r in rows if r["cutoff_bound"]], rows),
+        "n_engaged": len(engaged),
         "mean_consistency": round(
             sum(r["consistency"] for r in rows) / len(rows), 4
         ) if rows else 0.0,
@@ -278,14 +207,30 @@ def deprecation_state(llm) -> dict:
             [r for r in rows if r["self_contradictory"]], rows
         ),
         "n_samples_per_question": N_SAMPLES,
-        # Accuracy over responses the model actually committed on, excluding
-        # both UNCLEAR and the cutoff artefact. Reported alongside raw accuracy
-        # rather than instead of it: dropping inconvenient rows and quoting the
-        # remainder would flatter every model with an early cutoff.
+
+        "cutoff_bound_rate": rate([r for r in rows if r["cutoff_bound"]], rows),
+        "denies_existence_rate": rate(denied, rows),
+
+        "accuracy": rate(correct, rows),
+        # Excludes UNCLEAR and the cutoff artefact. Reported alongside raw
+        # accuracy, not instead of it: dropping inconvenient rows would flatter
+        # every model with an early cutoff.
         "accuracy_committed": rate(
-            [r for r in scored if r["correct"] and r["predicted"] != DENIES_EXISTENCE],
+            [r for r in scored
+             if r["correct"] and r["predicted"] != DENIES_EXISTENCE],
             [r for r in scored if r["predicted"] != DENIES_EXISTENCE],
         ),
+        "accuracy_knowledge": by_form["knowledge"],
+        "accuracy_premise": by_form["premise"],
+        "knowledge_premise_gap": round(
+            by_form["knowledge"] - by_form["premise"], 4
+        ),
+        "accuracy_by_bucket": by_bucket,
+        "accuracy_by_truth": by_truth,
+        "missed_removal_rate": rate(missed_removal, rows),
+        "over_warn_rate": rate(over_warned, rows),
+        "unclear_rate": rate([r for r in rows if r["predicted"] == UNCLEAR], rows),
+
         "n_calls": len(rows),
         "rows": rows,
     }

@@ -1,27 +1,19 @@
 """Classify a model's free-text answer about an API feature's state.
 
-This is the weakest link in the benchmark, so it lives in its own module with its
-own tests, and the tests run against real captured model output rather than
-hand-written guesses. The first version passed 21 invented cases and then scored
-58 percent of real Gemini responses UNCLEAR, almost entirely because of the bare
-phrase "is **current**", which no pattern covered. Invented test cases encode
-what you expect a model to say; they cannot tell you what it does say.
+    REMOVED           the feature existed and no longer works
+    DEPRECATED_LIVE   deprecated but still functional
+    CURRENT           fine to use
+    DENIES_EXISTENCE  the feature never existed at all
+    UNCLEAR           commits to nothing
 
-Four states, not three:
+The fourth state separates a training-cutoff artefact ("that is not a real
+OpenAI product") from a knowledge failure ("the old version is still live").
+Scoring both as REMOVED would make ignorance look like knowledge.
 
-    REMOVED           claims the feature existed and no longer works
-    DEPRECATED_LIVE   claims it is deprecated but still functional
-    CURRENT           claims it is fine to use
-    DENIES_EXISTENCE  claims the feature never existed at all
-
-The fourth is not a nicety. A model whose training predates a feature says "that
-is not a real OpenAI product", which is a different failure from "the old version
-is still live". Scoring both as REMOVED would make a cutoff artefact look like
-knowledge, and scoring both as CURRENT would hide a real refusal. It needs its
-own bucket so the writeup can separate "wrong about the world" from "has not
-heard of the world yet".
-
-UNCLEAR remains for responses that genuinely commit to nothing.
+Deterministic rules, not an LLM judge, so the scorer adds no variance. Tested
+against verbatim captured responses: the first version passed 21 invented cases
+and then scored 58 percent of real output UNCLEAR, because models write
+"is **current**" constantly and only "is the current" had a pattern.
 """
 
 import re
@@ -168,10 +160,10 @@ _CONCESSIVE = re.compile(
 
 
 def _primary_clause(text):
-    """Return the part of the response making the claim about the asked feature.
+    """The clause making the claim about the asked feature.
 
-    Only trims when the leading clause actually commits to something. A response
-    that opens with hedging and resolves after "however" keeps its full text.
+    Trims only when the leading clause already commits, so a response that
+    opens hedged and resolves after "however" keeps its full text.
     """
     m = _CONCESSIVE.search(text)
     if not m or m.start() < 40:

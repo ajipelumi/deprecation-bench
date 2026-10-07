@@ -788,6 +788,17 @@ MODEL = "google/gemini-2.5-flash"
 _run = deprecation_state.run(llm=kbench.llms[MODEL])
 RESULT = _run.result if hasattr(_run, "result") else _run
 
+# Stamp the result with what produced it. A benchmark that compares models and
+# then forgets which one it ran is not comparing anything.
+RESULT["model"] = MODEL
+RESULT["as_of"] = AS_OF
+RESULT["n_items"] = len(ITEMS)
+
+print(f"MODEL  {MODEL}")
+print(f"items  {len(ITEMS)}  x 2 forms x {N_SAMPLES} samples "
+      f"= {len(ITEMS) * 2 * N_SAMPLES} calls")
+print()
+
 # Persist first: Kaggle's progress widget fails to render and swallows cell
 # output, and a session restart wipes every in-memory name.
 with open(f"/kaggle/working/result-{MODEL.replace('/', '-')}.json", "w") as fh:
